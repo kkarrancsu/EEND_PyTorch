@@ -35,9 +35,12 @@ wsj_dir=${KALDI_ROOT}/egs/wsj/s5/
 diar_dir=${KALDI_ROOT}/egs/callhome_diarization/v1
 voxv1_dir=${KALDI_ROOT}/egs/voxceleb/v1
 
-# TODO:setup sym links for steps & utils w/ wsj 
+# setup sym links for steps & utils w/ wsj 
+cd $SCRIPT_DIR
+ln -s $wsj_dir/steps steps
+ln -s $wsj_dir/utils utils
 
- module load ffmpeg
+module load ffmpeg
 
 # create training dataset
 if [ $begin_stage -le 0 ] && [ $end_stage -ge 0 ]; then
