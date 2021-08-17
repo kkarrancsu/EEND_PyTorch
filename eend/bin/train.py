@@ -21,7 +21,7 @@ parser.add_argument('--initmodel', '-m', default='',
                     help='Initialize the model from given file')
 parser.add_argument('--resume', '-r', default='',
                     help='Resume the optimization from snapshot')
-parser.add_argument('--gpu', '-g', default=-1, type=int,
+parser.add_argument('--gpu', '-g', default=-1,
                     help='GPU ID (negative value indicates CPU)')
 parser.add_argument('--max-epochs', default=20, type=int,
                     help='Max. number of epochs to train')
@@ -54,6 +54,8 @@ parser.add_argument('--transformer-encoder-n-layers', default=2, type=int)
 parser.add_argument('--transformer-encoder-dropout', default=0.1, type=float)
 parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
 parser.add_argument('--seed', default=777, type=int)
+parser.add_argument('--num-workers', default=16, type=int,
+                    help='Number of processes to spawn for data loading')
 args = parser.parse_args()
 
 if not os.path.exists(args.model_save_dir):

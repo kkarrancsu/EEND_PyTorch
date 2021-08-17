@@ -3,7 +3,7 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 exp_root=${1:-"/exp/kkarra/diarization/voxconverse"}
 
-eend_code_root=${SCRIPT_DIR}/../../
+eend_code_root=${SCRIPT_DIR}/../../../
 
 conf_dir=${SCRIPT_DIR}/conf/
 train_dir=${exp_root}/mixture_sim/data/train_segments_ns2_beta2_100000
@@ -15,5 +15,10 @@ module load ffmpeg
 source activate ovad
 pushd . 
 cd ${eend_code_root}
-~/.conda/envs/ovad/bin/python eend/bin/train.py -c $train_conf $train_dir $dev_dir $model_dir
+
+num_gpus="auto-detect"   # can be an integer, or auto-detect to use all gpus available
+# the --gpu auto-detect option overrides configuration in the yaml file
+~/.conda/envs/ovad/bin/python eend/bin/train.py -c $train_conf --gpu $num_gpus --num-workers 16 \
+    $train_dir $dev_dir $model_dir
+
 popd

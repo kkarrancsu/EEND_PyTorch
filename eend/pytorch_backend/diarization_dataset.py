@@ -9,7 +9,6 @@ import numpy as np
 from eend import kaldi_data
 from eend import feature
 
-
 def _count_frames(data_len, size, step):
     # no padding at edges, last remaining samples are ignored
     return int((data_len - size + step) / step)
@@ -19,13 +18,20 @@ def _gen_frame_indices(
         data_length, size=2000, step=2000,
         use_last_samples=False,
         label_delay=0,
-        subsampling=1):
+        subsampling=1,
+        n_gpu=1, min_samps_per_gpu=2):
     i = -1
     for i in range(_count_frames(data_length, size, step)):
-        yield i * step, i * step + size
+        st = i*step
+        ed = i*step + size
+        if (ed - st) >= n_gpu * min_samps_per_gpu:
+            yield i * step, i * step + size
     if use_last_samples and i * step + size < data_length:
         if data_length - (i + 1) * step - subsampling * label_delay > 0:
-            yield (i + 1) * step, data_length
+            st = (i+1)*step
+            ed = data_length
+            if (ed - st) >= n_gpu * min_samps_per_gpu:
+                yield (i + 1) * step, data_length
 
 
 def my_collate(batch):
@@ -47,6 +53,8 @@ class KaldiDiarizationDataset(torch.utils.data.Dataset):
             use_last_samples=False,
             label_delay=0,
             n_speakers=None,
+            n_gpu=1,
+            logger=None
             ):
         self.data_dir = data_dir
         self.chunk_size = chunk_size
@@ -58,6 +66,9 @@ class KaldiDiarizationDataset(torch.utils.data.Dataset):
         self.n_speakers = n_speakers
         self.chunk_indices = []
         self.label_delay = label_delay
+        self.min_samps_per_gpu = n_gpu
+        self.n_gpu = n_gpu   # defaults to being set to 1, which is OK for CPU training
+        self.logger = logger
 
         self.data = kaldi_data.KaldiData(self.data_dir)
 
@@ -68,7 +79,8 @@ class KaldiDiarizationDataset(torch.utils.data.Dataset):
             for st, ed in _gen_frame_indices(
                     data_len, chunk_size, chunk_size, use_last_samples,
                     label_delay=self.label_delay,
-                    subsampling=self.subsampling):
+                    subsampling=self.subsampling,
+                    n_gpu=self.n_gpu, min_samps_per_gpu=self.min_samps_per_gpu):
                 self.chunk_indices.append(
                         (rec, st * self.subsampling, ed * self.subsampling))
         print(len(self.chunk_indices), " chunks")
@@ -87,11 +99,46 @@ class KaldiDiarizationDataset(torch.utils.data.Dataset):
             self.frame_shift,
             self.n_speakers)
         # Y: (frame, num_ceps)
-        Y = feature.transform(Y, self.input_transform)
+        YY = feature.transform(Y, self.input_transform)
         # Y_spliced: (frame, num_ceps * (context_size * 2 + 1))
-        Y_spliced = feature.splice(Y, self.context_size)
+        Y_spliced = feature.splice(YY, self.context_size)
         # Y_ss: (frame / subsampling, num_ceps * (context_size * 2 + 1))
-        Y_ss, T_ss = feature.subsample(Y_spliced, T, self.subsampling)
+        
+        # To enable Multi-GPU support, Y_ss.shape[0] > n_gpu, ideally, it should be
+        # a multiple of n_gpu.  Thus, we add in a check to determine whether
+        # subsampling should be skipped, in the case of "end-of-sequence" situations
+        # where the subsampling would create less samples than the # of gpu's, 
+        # which creates a problem of not being able to distribute the samples
+        # across all the gpus.
+        if Y_spliced.shape[0]//self.subsampling >= self.n_gpu:
+            Y_ss, T_ss = feature.subsample(Y_spliced, T, self.subsampling)
+        else:
+            actual_samps_per_gpu = Y_spliced.shape[0]/self.n_gpu
+            if actual_samps_per_gpu >= self.min_samps_per_gpu:
+                Y_ss, T_ss = Y_spliced, T
+                str_to_log = 'Not subsampling item: %d to enable multi-gpu training' % (i, )
+                if self.logger is not None:
+                    self.logger.warning(str_to_log)
+                else:
+                    print(str_to_log)
+                #import pdb; pdb.set_trace()
+            else:
+                """
+                # pad w/ replicated data to enable multi-gpu training
+                # NOTE: if you get any gradient blow-ups, this might be a good place to investigate
+                #  and determine a better strategy for how to replicate teh data smartly,
+                #  but I suspect this won't actually be a problem. 
+                n_repeat = self.n_gpu // Y_spliced.shape[0] + 1
+                Y_ss = np.repeat(Y_spliced, n_repeat, axis=0)
+                T_ss = np.repeat(T, n_repeat, axis=0)
+                str_to_log ='Duplicating data to item: %d by: %d to enable multi-gpu training' % (i, n_repeat, ) 
+                if self.logger is not None:
+                    logger.warning(str_to_log)
+                else:
+                    print(str_to_log)
+                """
+                # we shouldn't get here, due to the updates in the _gen_frame_indices function
+                raise Exception("you are trying to use data which is unsuppored with multi-gpu traiing!")
 
         Y_ss = torch.from_numpy(Y_ss).float()
         T_ss = torch.from_numpy(T_ss).float()

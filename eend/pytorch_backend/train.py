@@ -8,6 +8,7 @@ from tqdm import tqdm
 import logging
 
 import torch
+torch.multiprocessing.set_sharing_strategy('file_system')  # see: https://github.com/pytorch/pytorch/issues/973
 from torch import optim
 from torch import nn
 from torch.utils.data import DataLoader
@@ -25,7 +26,7 @@ def train(args):
     # Logger settings====================================================
     formatter = logging.Formatter("[ %(levelname)s : %(asctime)s ] - %(message)s")
     logging.basicConfig(level=logging.DEBUG, format="[ %(levelname)s : %(asctime)s ] - %(message)s")
-    logger = logging.getLogger("Pytorch")
+    logger = logging.getLogger(__name__)
     fh = logging.FileHandler(args.model_save_dir + "/train.log", mode='w')
     fh.setFormatter(formatter)
     logger.addHandler(fh)
@@ -36,6 +37,16 @@ def train(args):
     os.environ['PYTORCH_SEED'] = str(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+    if torch.cuda.is_available():
+        if args.gpu == 'auto-detect':
+            num_gpu_arg = torch.cuda.device_count()
+        else:
+            num_gpu_arg = int(args.gpu)
+        device = torch.device('cuda')
+    else:
+        num_gpu_arg = 1
+        device = torch.device('cpu')
 
     train_set = KaldiDiarizationDataset(
         data_dir=args.train_data_dir,
@@ -49,6 +60,8 @@ def train(args):
         use_last_samples=True,
         label_delay=args.label_delay,
         n_speakers=args.num_speakers,
+        n_gpu=num_gpu_arg,
+        logger=logger,
         )
     dev_set = KaldiDiarizationDataset(
         data_dir=args.valid_data_dir,
@@ -62,6 +75,8 @@ def train(args):
         use_last_samples=True,
         label_delay=args.label_delay,
         n_speakers=args.num_speakers,
+        n_gpu=num_gpu_arg,
+        logger=logger
         )
 
     # Prepare model
@@ -79,10 +94,12 @@ def train(args):
                 )
     else:
         raise ValueError('Possible model_type is "Transformer"')
-    
-    device = torch.device("cuda" if (torch.cuda.is_available() and args.gpu > 0) else "cpu")
+   
     if device.type == "cuda":
-        model = nn.DataParallel(model, list(range(args.gpu)))
+        # TODO: convert to DistributedDataParallel
+        logger.info('Using %d GPUs' % (num_gpu_arg, ))
+        model = nn.DataParallel(model, list(range(num_gpu_arg)))
+
     model = model.to(device)
     logger.info('Prepared model')
     logger.info(model)
@@ -113,7 +130,7 @@ def train(args):
             train_set,
             batch_size=args.batchsize,
             shuffle=True,
-            num_workers=16,
+            num_workers=args.num_workers,
             collate_fn=my_collate
             )
 
@@ -121,7 +138,7 @@ def train(args):
             dev_set,
             batch_size=args.batchsize,
             shuffle=False,
-            num_workers=16,
+            num_workers=args.num_workers,
             collate_fn=my_collate
             )
 
@@ -139,6 +156,16 @@ def train(args):
             t = [ti.to(device) for ti in t]
 
             output = model(y)
+
+            """
+            ####  DEBUGGING  ####
+            for ii in range(len(output)):
+                if output[ii].size()[0] != y[ii].size()[0]:
+                    import pdb; pdb.set_trace()
+                    output = model(y)
+            #####################
+            """
+
             loss, label = batch_pit_loss(output, t)
             # clear graph here
             loss.backward()
