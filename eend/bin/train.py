@@ -61,5 +61,11 @@ args = parser.parse_args()
 if not os.path.exists(args.model_save_dir):
     os.makedirs(args.model_save_dir)
 
-from eend.pytorch_backend.train import train
-train(args)
+from eend.pytorch_backend.train import train_runner
+import torch
+
+if __name__ == '__main__':
+    # see here for the reason to wrap this around the __main__
+    # https://discuss.pytorch.org/t/multiprocessing-not-working-on-pytorch-on-macbook/80663/4
+    torch.multiprocessing.freeze_support()
+    train_runner(args)

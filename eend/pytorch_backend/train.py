@@ -8,36 +8,73 @@ from tqdm import tqdm
 import logging
 
 import torch
-torch.multiprocessing.set_sharing_strategy('file_system')  # see: https://github.com/pytorch/pytorch/issues/973
+#torch.multiprocessing.set_sharing_strategy('file_system')  # see: https://github.com/pytorch/pytorch/issues/973
 from torch import optim
 from torch import nn
 from torch.utils.data import DataLoader
+
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data.distributed import DistributedSampler
 
 from eend.pytorch_backend.models import TransformerModel, NoamScheduler
 from eend.pytorch_backend.diarization_dataset import KaldiDiarizationDataset, my_collate
 from eend.pytorch_backend.loss import batch_pit_loss, report_diarization_error
 
 
-def train(args):
+def init_process(rank, size, backend='nccl'):
+    """ Initialize the distributed environment. """
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12346'
+    dist.init_process_group(backend, rank=rank, world_size=size)
+
+
+def train_runner(args, ddp=True):
+    # will spawn the mutliple processes for DDP
+    if ddp:
+        if torch.cuda.is_available():
+            if args.gpu == 'auto-detect':
+                world_size = torch.cuda.device_count()
+            else:
+                world_size = int(args.gpu)
+        else:
+            raise Exception('Need CUDA to use DDP')
+    else:
+        # TODO: add support?
+        raise Exception("Unsupported")
+
+    mp.spawn(train, args=(world_size, args), nprocs=world_size, join=True)
+
+def train(rank, world_size, args):
     """ Training model with pytorch backend.
     This function is called from eend/bin/train.py with
     parsed command-line arguments.
     """
+    torch.set_num_threads(4)  
+
     # Logger settings====================================================
     formatter = logging.Formatter("[ %(levelname)s : %(asctime)s ] - %(message)s")
     logging.basicConfig(level=logging.DEBUG, format="[ %(levelname)s : %(asctime)s ] - %(message)s")
     logger = logging.getLogger(__name__)
-    fh = logging.FileHandler(args.model_save_dir + "/train.log", mode='w')
+    fh = logging.FileHandler(args.model_save_dir + "/train_" + str(rank) + ".log", mode='w')
     fh.setFormatter(formatter)
     logger.addHandler(fh)
     # ===================================================================
     logger.info(str(args))
 
-    np.random.seed(args.seed)
-    os.environ['PYTORCH_SEED'] = str(args.seed)
+    init_process(rank, world_size)
+    logger.info(
+        f"Rank {rank + 1}/{world_size} process initialized.\n"
+    )
+
+    #os.environ['PYTORCH_SEED'] = str(args.seed)
+    torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    np.random.seed(args.seed)
 
+    """
     if torch.cuda.is_available():
         if args.gpu == 'auto-detect':
             num_gpu_arg = torch.cuda.device_count()
@@ -47,6 +84,7 @@ def train(args):
     else:
         num_gpu_arg = 1
         device = torch.device('cpu')
+    """
 
     train_set = KaldiDiarizationDataset(
         data_dir=args.train_data_dir,
@@ -60,7 +98,7 @@ def train(args):
         use_last_samples=True,
         label_delay=args.label_delay,
         n_speakers=args.num_speakers,
-        n_gpu=num_gpu_arg,
+        #n_gpu=num_gpu_arg,
         logger=logger,
         )
     dev_set = KaldiDiarizationDataset(
@@ -75,7 +113,7 @@ def train(args):
         use_last_samples=True,
         label_delay=args.label_delay,
         n_speakers=args.num_speakers,
-        n_gpu=num_gpu_arg,
+        #n_gpu=num_gpu_arg,
         logger=logger
         )
 
@@ -94,24 +132,27 @@ def train(args):
                 )
     else:
         raise ValueError('Possible model_type is "Transformer"')
-   
+  
+    """ 
     if device.type == "cuda":
         # TODO: convert to DistributedDataParallel
         logger.info('Using %d GPUs' % (num_gpu_arg, ))
         model = nn.DataParallel(model, list(range(num_gpu_arg)))
-
-    model = model.to(device)
+    """
+    model.cuda(rank)
+    model = DistributedDataParallel(model, device_ids=[rank])
+    #model = model.to(device)
     logger.info('Prepared model')
     logger.info(model)
 
     # Setup optimizer
     if args.optimizer == 'adam':
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr * world_size)
     elif args.optimizer == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=args.lr)
+        optimizer = optim.SGD(model.parameters(), lr=args.lr * world_size)
     elif args.optimizer == 'noam':
         # for noam, lr refers to base_lr (i.e. scale), suggest lr=1.0
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98), eps=1e-9)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr * world_size, betas=(0.9, 0.98), eps=1e-9)
     else:
         raise ValueError(args.optimizer)
 
@@ -126,21 +167,25 @@ def train(args):
         logger.info(f"Load model from {args.initmodel}")
         model.load_state_dict(torch.load(args.initmodel))
 
+    train_sampler = DistributedSampler(train_set, rank=rank, num_replicas=world_size)
+    dev_sampler = DistributedSampler(dev_set, rank=rank, num_replicas=world_size)
     train_iter = DataLoader(
             train_set,
-            batch_size=args.batchsize,
-            shuffle=True,
+            batch_size=int(args.batchsize/world_size),
+            shuffle=False,
             num_workers=args.num_workers,
-            collate_fn=my_collate
-            )
+            collate_fn=my_collate,
+            sampler=train_sampler
+    )
 
     dev_iter = DataLoader(
             dev_set,
-            batch_size=args.batchsize,
+            batch_size=int(args.batchsize/world_size),
             shuffle=False,
             num_workers=args.num_workers,
-            collate_fn=my_collate
-            )
+            collate_fn=my_collate,
+            sampler=dev_sampler
+    )
 
     # Training
     # y: feats, t: label
@@ -152,8 +197,8 @@ def train(args):
         loss_epoch = 0
         num_total = 0
         for step, (y, t) in tqdm(enumerate(train_iter), ncols=100, total=len(train_iter)):
-            y = [yi.to(device) for yi in y]
-            t = [ti.to(device) for ti in t]
+            y = [yi.cuda(rank) for yi in y]
+            t = [ti.cuda(rank) for ti in t]
 
             output = model(y)
 
@@ -180,15 +225,16 @@ def train(args):
                     nn.utils.clip_grad_value_(model.parameters(), args.gradclip)
             loss_epoch += loss.item()
             num_total += 1
-        loss_epoch /= num_total
         
+        loss_epoch /= num_total
         model.eval()
         with torch.no_grad():
             stats_avg = {}
             cnt = 0
             for y, t in dev_iter:
-                y = [yi.to(device) for yi in y]
-                t = [ti.to(device) for ti in t]
+                y = [yi.cuda(rank) for yi in y]
+                t = [ti.cuda(rank) for ti in t]
+
                 output = model(y)
                 _, label = batch_pit_loss(output, t)
                 stats = report_diarization_error(output, label)
@@ -200,8 +246,9 @@ def train(args):
             for k in stats_avg.keys():
                 stats_avg[k] = round(stats_avg[k], 2)
 
-        model_filename = os.path.join(args.model_save_dir, f"transformer{epoch}.th")
-        torch.save(model.state_dict(), model_filename)
+        if rank == 0 and epoch % 5 == 0:
+            model_filename = os.path.join(args.model_save_dir, f"transformer{epoch}.th")
+            torch.save(model.state_dict(), model_filename)
 
         logger.info(f"Epoch: {epoch:3d}, LR: {optimizer.param_groups[0]['lr']:.7f},\
             Training Loss: {loss_epoch:.5f}, Dev Stats: {stats_avg}")

@@ -10,7 +10,7 @@ voxceleb2_root="/export/common/data/corpora/voxceleb2"
 musan_root="/expscratch/kkarra/musan/data/local"  # NOTE: this isn't the full MUSAN, a subset for EEND
                                                   # TODO: make sure the repo has this tar data
 begin_stage=0
-end_stage=2
+end_stage=3
 
 # simulation options for creating mixture dataset
 simu_opts_overlap=yes

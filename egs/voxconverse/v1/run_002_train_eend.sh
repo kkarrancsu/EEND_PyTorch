@@ -18,7 +18,7 @@ cd ${eend_code_root}
 
 num_gpus="auto-detect"   # can be an integer, or auto-detect to use all gpus available
 # the --gpu auto-detect option overrides configuration in the yaml file
-~/.conda/envs/ovad/bin/python eend/bin/train.py -c $train_conf --gpu $num_gpus --num-workers 16 \
+~/.conda/envs/ovad/bin/python eend/bin/train.py -c $train_conf --gpu $num_gpus --num-workers 8 \
     $train_dir $dev_dir $model_dir
 
 popd
