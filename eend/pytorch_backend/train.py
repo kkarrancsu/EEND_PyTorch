@@ -26,7 +26,7 @@ from eend.pytorch_backend.loss import batch_pit_loss, report_diarization_error
 def init_process(rank, size, backend='nccl'):
     """ Initialize the distributed environment. """
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12346'
+    os.environ['MASTER_PORT'] = '12345'
     dist.init_process_group(backend, rank=rank, world_size=size)
 
 
@@ -51,7 +51,7 @@ def train(rank, world_size, args):
     This function is called from eend/bin/train.py with
     parsed command-line arguments.
     """
-    torch.set_num_threads(4)  
+    #torch.set_num_threads(16)  
 
     # Logger settings====================================================
     formatter = logging.Formatter("[ %(levelname)s : %(asctime)s ] - %(message)s")
