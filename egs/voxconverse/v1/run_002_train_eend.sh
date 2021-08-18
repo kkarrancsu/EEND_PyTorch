@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-exp_root=${1:-"/exp/kkarra/diarization/voxconverse"}
+exp_root=${1:-"/expscratch/kkarra/diarization/voxconverse"}
 
 eend_code_root=${SCRIPT_DIR}/../../../
 

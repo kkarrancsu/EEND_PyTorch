@@ -1,15 +1,15 @@
 #!/bin/bash
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-exp_root=${1:-"/exp/kkarra/diarization/voxconverse"}
+exp_root=${1:-"/expscratch/kkarra/diarization/voxconverse"}
 dataprep_root=${2:-"/home/hltcoe/kkarra/dataprep/voxconverse"}
 audio_root="/export/common/data/corpora/voxconverse/audio"
 nj=40
 voxceleb1_root="/export/common/data/corpora/voxceleb1"
 voxceleb2_root="/export/common/data/corpora/voxceleb2"
-musan_root="/exp/kkarra/musan/data/local"  # NOTE: this isn't the full MUSAN, a subset for EEND
-                                           # TODO: make sure the repo has this tar data
-begin_stage=2
+musan_root="/expscratch/kkarra/musan/data/local"  # NOTE: this isn't the full MUSAN, a subset for EEND
+                                                  # TODO: make sure the repo has this tar data
+begin_stage=0
 end_stage=2
 
 # simulation options for creating mixture dataset
@@ -21,9 +21,12 @@ simu_opts_num_train=100000  # of mixtures for training
 simu_opts_min_utts=10
 simu_opts_max_utts=20
 
+# TODO: change to the conda environment name!
+source activate ovad
+
 # derived
 data_augment_root=${exp_root}/aug
-eend_code_root=${SCRIPT_DIR}/../../
+eend_code_root=${SCRIPT_DIR}/../../../
 
 if [[ -z "${KALDI_ROOT}" ]]; then
     echo "KALDI_ROOT undefined!"
@@ -145,8 +148,7 @@ if [ $begin_stage -le 2 ] && [ $end_stage -ge 2 ]; then
     fi
 
     for simu_opts_sil_scale in 2; do
-        #for dset in train_segments dev_segments; do
-        for dset in dev_segments; do
+        for dset in train_segments dev_segments; do
             if [ "$dset" == "train_segments" ]; then
                 n_mixtures=$simu_opts_num_train
             else
