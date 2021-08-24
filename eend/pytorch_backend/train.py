@@ -140,7 +140,7 @@ def train(rank, world_size, args):
             n_units=args.hidden_size,
             n_heads=args.transformer_encoder_n_heads,
             n_layers=args.transformer_encoder_n_layers,
-            xformer_dropout=args.transformer_dropout,
+            xformer_dropout=args.transformer_encoder_dropout,
             attractor_encoder_dropout=args.attractor_encoder_dropout,
             attractor_decoder_dropout=args.attractor_decoder_dropout,
             attractor_loss_ratio=args.attractor_loss_ratio,

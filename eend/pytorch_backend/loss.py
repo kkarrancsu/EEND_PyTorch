@@ -197,6 +197,7 @@ def eda_batch_pit_loss(ys, ts, attractor_logits, attractor_loss_ratio=1.0):
     return total_loss, attractor_loss, loss
 
 
+
 def calc_diarization_error(pred, label, label_delay=0):
     """
     Calculates diarization error stats for reporting.
