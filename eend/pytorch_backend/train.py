@@ -8,7 +8,10 @@ from tqdm import tqdm
 import logging
 
 import torch
-#torch.multiprocessing.set_sharing_strategy('file_system')  # see: https://github.com/pytorch/pytorch/issues/973
+# see: https://github.com/pytorch/pytorch/issues/973
+#  needed when I was using DataParallel, but I don't think its necessary
+#  for DistributedDataParallel
+#torch.multiprocessing.set_sharing_strategy('file_system')
 from torch import optim
 from torch import nn
 from torch.utils.data import DataLoader
@@ -18,9 +21,9 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 
-from eend.pytorch_backend.models import TransformerModel, NoamScheduler
+from eend.pytorch_backend.models import TransformerModel, NoamScheduler, TransformerEDAModel
 from eend.pytorch_backend.diarization_dataset import KaldiDiarizationDataset, my_collate
-from eend.pytorch_backend.loss import batch_pit_loss, report_diarization_error
+from eend.pytorch_backend.loss import batch_pit_loss, eda_batch_pit_loss, report_diarization_error
 
 
 def init_process(rank, size, backend='nccl'):
@@ -120,18 +123,31 @@ def train(rank, world_size, args):
     # Prepare model
     Y, T = next(iter(train_set))
     
-    if args.model_type == 'Transformer':
+    if args.model_type.lower() == 'transformer':
         model = TransformerModel(
-                n_speakers=args.num_speakers,
-                in_size=Y.shape[1],
-                n_units=args.hidden_size,
-                n_heads=args.transformer_encoder_n_heads,
-                n_layers=args.transformer_encoder_n_layers,
-                dropout=args.transformer_encoder_dropout,
-                has_pos=False
-                )
+            n_speakers=args.num_speakers,
+            in_size=Y.shape[1],
+            n_units=args.hidden_size,
+            n_heads=args.transformer_encoder_n_heads,
+            n_layers=args.transformer_encoder_n_layers,
+            dropout=args.transformer_encoder_dropout,
+            has_pos=False
+        )
+    elif args.model_type.lower() == 'transformer_eda':
+        model = TransformerEDAModel(
+            n_speakers=args.num_speakers,
+            in_size=Y.shape[1],
+            n_units=args.hidden_size,
+            n_heads=args.transformer_encoder_n_heads,
+            n_layers=args.transformer_encoder_n_layers,
+            xformer_dropout=args.transformer_dropout,
+            attractor_encoder_dropout=args.attractor_encoder_dropout,
+            attractor_decoder_dropout=args.attractor_decoder_dropout,
+            attractor_loss_ratio=args.attractor_loss_ratio,
+            has_pos=False
+        )
     else:
-        raise ValueError('Possible model_type is "Transformer"')
+        raise ValueError('Possible model_type are: ["Transformer". "Transformer_EDA"]')
   
     """ 
     if device.type == "cuda":
@@ -210,8 +226,14 @@ def train(rank, world_size, args):
                     output = model(y)
             #####################
             """
-
-            loss, label = batch_pit_loss(output, t)
+            if args.model_type.lower() == 'transformer' or isinstance(model, TransformerModel):
+                loss, label = batch_pit_loss(output, t)
+            elif args.model_type.lower() == 'transformer_eda' or isinstance(model, TransformerEDAModel):
+                y, attractor_logits = output
+                loss, attractor_loss, pit_loss = eda_batch_pit_loss(y, t, attractor_logits,
+                                                                    attractor_loss_ratio=model.attractor_loss_ratio)
+            else:
+                raise Exception("Unknown model type!")
             # clear graph here
             loss.backward()
 
