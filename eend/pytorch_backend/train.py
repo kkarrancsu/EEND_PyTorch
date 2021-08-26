@@ -45,7 +45,7 @@ def train_runner(args, ddp=True):
             raise Exception('Need CUDA to use DDP')
     else:
         # TODO: add support?
-        raise Exception("Unsupported")
+        train(-1, -1, args)
 
     mp.spawn(train, args=(world_size, args), nprocs=world_size, join=True)
 
@@ -54,8 +54,6 @@ def train(rank, world_size, args):
     This function is called from eend/bin/train.py with
     parsed command-line arguments.
     """
-    #torch.set_num_threads(16)  
-
     # Logger settings====================================================
     formatter = logging.Formatter("[ %(levelname)s : %(asctime)s ] - %(message)s")
     logging.basicConfig(level=logging.DEBUG, format="[ %(levelname)s : %(asctime)s ] - %(message)s")
@@ -66,28 +64,35 @@ def train(rank, world_size, args):
     # ===================================================================
     logger.info(str(args))
 
-    init_process(rank, world_size)
-    logger.info(
-        f"Rank {rank + 1}/{world_size} process initialized.\n"
-    )
+    use_ddp = False if rank == -1 and world_size == -1 else True
 
-    #os.environ['PYTORCH_SEED'] = str(args.seed)
+    if not use_ddp:
+        logger.info('Running on single GPU')
+    else:
+        init_process(rank, world_size)
+        logger.info(
+            f"Rank {rank + 1}/{world_size} process initialized.\n"
+        )
+
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     np.random.seed(args.seed)
 
-    """
-    if torch.cuda.is_available():
-        if args.gpu == 'auto-detect':
-            num_gpu_arg = torch.cuda.device_count()
+    if not use_ddp: 
+        if torch.cuda.is_available():
+            if args.gpu == 'auto-detect':
+                num_gpu_arg = torch.cuda.device_count()
+            else:
+                num_gpu_arg = int(args.gpu)
+            device = torch.device('cuda')
         else:
-            num_gpu_arg = int(args.gpu)
-        device = torch.device('cuda')
+            num_gpu_arg = 1
+            device = torch.device('cpu')
+        dataset_kwargs = {'n_gpu': num_gpu_arg}
     else:
-        num_gpu_arg = 1
-        device = torch.device('cpu')
-    """
+        dataset_kwargs = {}
+    
 
     train_set = KaldiDiarizationDataset(
         data_dir=args.train_data_dir,
@@ -101,8 +106,8 @@ def train(rank, world_size, args):
         use_last_samples=True,
         label_delay=args.label_delay,
         n_speakers=args.num_speakers,
-        #n_gpu=num_gpu_arg,
         logger=logger,
+        **dataset_kwargs
         )
     dev_set = KaldiDiarizationDataset(
         data_dir=args.valid_data_dir,
@@ -116,8 +121,8 @@ def train(rank, world_size, args):
         use_last_samples=True,
         label_delay=args.label_delay,
         n_speakers=args.num_speakers,
-        #n_gpu=num_gpu_arg,
-        logger=logger
+        logger=logger,
+        **dataset_kwargs
         )
 
     # Prepare model
@@ -149,26 +154,31 @@ def train(rank, world_size, args):
     else:
         raise ValueError('Possible model_type are: ["Transformer". "Transformer_EDA"]')
   
-    """ 
-    if device.type == "cuda":
-        # TODO: convert to DistributedDataParallel
-        logger.info('Using %d GPUs' % (num_gpu_arg, ))
-        model = nn.DataParallel(model, list(range(num_gpu_arg)))
-    """
-    model.cuda(rank)
-    model = DistributedDataParallel(model, device_ids=[rank])
-    #model = model.to(device)
+    if not use_ddp: 
+        if device.type == "cuda":
+            # TODO: convert to DistributedDataParallel
+            logger.info('Using %d GPUs' % (num_gpu_arg, ))
+            model = nn.DataParallel(model, list(range(num_gpu_arg)))
+        model = model.to(device)
+        lr_input = args.lr
+        batchsize_input = int(args.batchsize)
+    else:
+        model.cuda(rank)
+        model = DistributedDataParallel(model, device_ids=[rank])
+        lr_input = args.lr * world_size
+        batchsize_input = int(args.batchsize/world_size)
+
     logger.info('Prepared model')
     logger.info(model)
 
     # Setup optimizer
     if args.optimizer == 'adam':
-        optimizer = optim.Adam(model.parameters(), lr=args.lr * world_size)
+        optimizer = optim.Adam(model.parameters(), lr=lr_input)
     elif args.optimizer == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=args.lr * world_size)
+        optimizer = optim.SGD(model.parameters(), lr=lr_input)
     elif args.optimizer == 'noam':
         # for noam, lr refers to base_lr (i.e. scale), suggest lr=1.0
-        optimizer = optim.Adam(model.parameters(), lr=args.lr * world_size, betas=(0.9, 0.98), eps=1e-9)
+        optimizer = optim.Adam(model.parameters(), lr=lr_input, betas=(0.9, 0.98), eps=1e-9)
     else:
         raise ValueError(args.optimizer)
 
@@ -183,20 +193,25 @@ def train(rank, world_size, args):
         logger.info(f"Load model from {args.initmodel}")
         model.load_state_dict(torch.load(args.initmodel))
 
-    train_sampler = DistributedSampler(train_set, rank=rank, num_replicas=world_size)
-    dev_sampler = DistributedSampler(dev_set, rank=rank, num_replicas=world_size)
+    if use_ddp:
+        train_sampler = DistributedSampler(train_set, rank=rank, num_replicas=world_size)
+        dev_sampler = DistributedSampler(dev_set, rank=rank, num_replicas=world_size)
+    else:
+        # use default sampler
+        train_sampler = None
+        dev_sampler = None
+
     train_iter = DataLoader(
             train_set,
-            batch_size=int(args.batchsize/world_size),
+            batch_size=batchsize_input,
             shuffle=False,
             num_workers=args.num_workers,
             collate_fn=my_collate,
             sampler=train_sampler
     )
-
     dev_iter = DataLoader(
             dev_set,
-            batch_size=int(args.batchsize/world_size),
+            batch_size=batchsize_input,
             shuffle=False,
             num_workers=args.num_workers,
             collate_fn=my_collate,
@@ -213,10 +228,12 @@ def train(rank, world_size, args):
         loss_epoch = 0
         num_total = 0
         for step, (y, t) in tqdm(enumerate(train_iter), ncols=100, total=len(train_iter)):
-            y = [yi.cuda(rank) for yi in y]
-            t = [ti.cuda(rank) for ti in t]
-
-            output = model(y)
+            if use_ddp:
+                y = [yi.cuda(rank) for yi in y]
+                t = [ti.cuda(rank) for ti in t]
+            else:
+                y = [yi.to(device) for yi in y]
+                t = [ti.to(device) for ti in t]
 
             """
             ####  DEBUGGING  ####
@@ -227,11 +244,12 @@ def train(rank, world_size, args):
             #####################
             """
             if args.model_type.lower() == 'transformer' or isinstance(model, TransformerModel):
+                output = model(y)
                 loss, label = batch_pit_loss(output, t)
             elif args.model_type.lower() == 'transformer_eda' or isinstance(model, TransformerEDAModel):
-                y, attractor_logits = output
-                loss, attractor_loss, pit_loss = eda_batch_pit_loss(y, t, attractor_logits,
-                                                                    attractor_loss_ratio=model.attractor_loss_ratio)
+                output, attractor_logits = model(y, t)
+                loss, label, attractor_loss, pit_loss = eda_batch_pit_loss(output, t, attractor_logits,
+                                                                           attractor_loss_ratio=args.attractor_loss_ratio)
             else:
                 raise Exception("Unknown model type!")
             # clear graph here
@@ -256,9 +274,16 @@ def train(rank, world_size, args):
             for y, t in dev_iter:
                 y = [yi.cuda(rank) for yi in y]
                 t = [ti.cuda(rank) for ti in t]
-
-                output = model(y)
-                _, label = batch_pit_loss(output, t)
+                
+                if args.model_type.lower() == 'transformer' or isinstance(model, TransformerModel):
+                    output = model(y)
+                    _, label = batch_pit_loss(output, t)
+                elif args.model_type.lower() == 'transformer_eda' or isinstance(model, TransformerEDAModel):
+                    output, attractor_logits = model(y, t)
+                    _, label, _, _ = eda_batch_pit_loss(output, t, attractor_logits,
+                                                        attractor_loss_ratio=args.attractor_loss_ratio)
+                else:
+                    raise Exception("Unknown model type!")
                 stats = report_diarization_error(output, label)
                 for k, v in stats.items():
                     stats_avg[k] = stats_avg.get(k, 0) + v

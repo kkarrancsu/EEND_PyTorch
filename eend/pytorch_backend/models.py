@@ -4,11 +4,13 @@
 
 import math
 
+import torch
 import torch.nn as nn
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 from torch.optim.lr_scheduler import _LRScheduler
 
+from torch.nn.utils.rnn import pad_sequence, pack_sequence, pad_packed_sequence
 
 class NoamScheduler(_LRScheduler):
     """
@@ -79,8 +81,8 @@ class DiarizationTransformerEncoder(nn.Module):
         initrange = 0.1
         self.encoder.bias.data.zero_()
         self.encoder.weight.data.uniform_(-initrange, initrange)
-        self.decoder.bias.data.zero_()
-        self.decoder.weight.data.uniform_(-initrange, initrange)
+        #self.decoder.bias.data.zero_()
+        #self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, src, has_mask=False, activation=None):
         if has_mask:
@@ -91,7 +93,7 @@ class DiarizationTransformerEncoder(nn.Module):
         else:
             self.src_mask = None
 
-        src = nn.utils.rnn.pad_sequence(src, padding_value=-1, batch_first=True)
+        src = pad_sequence(src, padding_value=-1, batch_first=True)
 
         # src: (B, T, E)
         src = self.encoder(src)
@@ -154,6 +156,11 @@ class TransformerModel(nn.Module):
 
         self.init_weights()
 
+    def init_weights(self):
+        initrange = 0.1
+        self.decoder.bias.data.zero_()
+        self.decoder.weight.data.uniform_(-initrange, initrange)
+
     def forward(self, src, has_mask=False, activation=None):
         ilens = [x.shape[0] for x in src]
         # output: (B, T, E)
@@ -210,29 +217,36 @@ class EncoderDecoderAttractor(nn.Module):
         super(EncoderDecoderAttractor, self).__init__()
 
         n_layers = 1
-        self.encoder = nn.LSTM(n_units, n_units, n_layers, encoder_dropout)
-        self.decoder = nn.LSTM(n_units, n_units, n_layers, decoder_dropout)
+        self.encoder = nn.LSTM(input_size=n_units, hidden_size=n_units, num_layers=n_layers, dropout=encoder_dropout, batch_first=True)
+        self.decoder = nn.LSTM(input_size=n_units, hidden_size=n_units, num_layers=n_layers, dropout=decoder_dropout, batch_first=True)
         self.counter = nn.Linear(n_units, 1)
 
         self.n_units = n_units
 
     def compute_attractors(self, xs, zeros):
-        hx, cx, _ = self.encoder(None, None, xs)
-        _, _, attractors = self.decoder(hx, cx, zeros)
+        _, hidden = self.encoder(xs)
+        attractors, _ = self.decoder(zeros, hidden)
         return attractors
 
     def forward(self, xs, n_speakers):
-        zeros = [torch.zeros((n_spk + 1, self.n_units), dtype=torch.float32) for n_spk in n_speakers]
+        # the +1 comes from Fig.1 in the EDA paper.
+        # Note that an additional attractor is added, but label is set to 0
+        #  to enable the algorithm
+        zs = [torch.zeros((n_spk + 1, self.n_units), dtype=torch.float32, device=xs[0].device) for n_spk in n_speakers]
+        zeros = pack_sequence(zs, enforce_sorted=False)
         attractors = self.compute_attractors(xs, zeros)
-        attractor_logits = torch.cat([torch.reshape(self.counter(att), (-1, n_spk + 1))
-                                     for att, n_spk in zip(attractors, n_speakers)], dim=1)
+        
+        # unpack the packed sequence
+        attractors, attractor_lens = pad_packed_sequence(attractors, batch_first=True)
+        attractor_logits = self.counter(attractors)  # NOTE: this may fail if not all same lens??
+                                                     # in which case you may need to do something
+                                                     # similar to what was done below w/ the for-loop
+        attractor_logits = attractor_logits.squeeze()
 
-        # TODO: understand this!!
         # The final attractor does not correspond to a speaker so remove it
-        # attractors = [att[:-1] for att in attractors]
-        attractors = [att[slice(0, att.shape[0] - 1)] for att in attractors]
+        aa = [attractors[ii,0:n_speakers[ii],:] for ii in range(len(n_speakers))]
 
-        return attractors, attractor_logits
+        return aa, attractor_logits
 
 
 class TransformerEDAModel(nn.Module):
@@ -262,10 +276,10 @@ class TransformerEDAModel(nn.Module):
             decoder_dropout=attractor_decoder_dropout,
         )
 
-        self.init_weights()
         self.attractor_loss_ratio = attractor_loss_ratio
 
     def forward(self, src, ts, has_mask=False, activation=None):
+        ilens = [x.shape[0] for x in src]
         # output: (B, T, E)
         emb = self.transformer_encoder(src, has_mask, activation)
 
@@ -274,14 +288,13 @@ class TransformerEDAModel(nn.Module):
         attractors, attractor_logits = self.eda(emb, n_speakers)
 
         # use the attractor & multiply w/ embedding
-        ys = [torch.matmul(e, att.T) for e, att in zip(emb, attractors)]
+        ys = [torch.matmul(emb[ii,:ilens[ii]], attractors[ii].T) for ii in range(emb.size()[0])]
         # TODO: do I need to apply the sigmoid?  - I don't think so ...
 
         return ys, attractor_logits
 
 
 if __name__ == "__main__":
-    import torch
     model = TransformerModel(5, 40, 4, 512, 2, dropout=0.1)
     input = torch.randn(8, 500, 40)
     print("Model output:", model(input).size())

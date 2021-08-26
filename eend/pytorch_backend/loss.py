@@ -182,19 +182,23 @@ def standard_loss(ys, ts, label_delay=0):
 def eda_batch_pit_loss(ys, ts, attractor_logits, attractor_loss_ratio=1.0):
     n_speakers = [t.shape[1] for t in ts]
 
-    # compute attractor loss
-    labels = torch.cat([torch.IntTensor([[1] * n_spk + [0]]) for n_spk in n_speakers], dim=1)
+    # compute attractor loss: Eq(7) in paper 
+    # NOTE: do we scale by 1/(1+S) ??
+    labels = torch.cat([torch.tensor([[1] * n_spk + [0]], dtype=torch.float32, device=attractor_logits.device) for n_spk in n_speakers], dim=0)
     attractor_loss = F.binary_cross_entropy_with_logits(attractor_logits, labels)
 
+    """
     max_n_speakers = max(n_speakers)
     ts_padded = pad_labels(ts, max_n_speakers)
     ys_padded = pad_results(ys, max_n_speakers)
-
     _, labels = batch_pit_n_speaker_loss(ys_padded, ts_padded, n_speakers)
     loss = standard_loss(ys, labels)
+    """
+    # NOTE; this may break if different # of speakers / frame
+    loss, labels = batch_pit_loss(ys, ts)
 
     total_loss = loss + attractor_loss * attractor_loss_ratio
-    return total_loss, attractor_loss, loss
+    return total_loss, labels, attractor_loss, loss
 
 
 

@@ -71,4 +71,5 @@ if __name__ == '__main__':
     # see here for the reason to wrap this around the __main__
     # https://discuss.pytorch.org/t/multiprocessing-not-working-on-pytorch-on-macbook/80663/4
     torch.multiprocessing.freeze_support()
-    train_runner(args)
+    train_runner(args, ddp=True)  # seting this to False and num_gpus=1 will allow you to 
+                                  # debug the code with pdb
