@@ -9,8 +9,8 @@ data_root="/export/common/data/corpora/LDC"
 callhome_dir="${data_root}/LDC2001S97"
 swb2_phase1_train="${data_root}/LDC98S75"
 musan_root="/export/common/data/corpora/MUSAN/musan"
-begin_stage=0
-end_stage=0
+begin_stage=5
+end_stage=5
 
 # data preparation options
 sad_num_jobs=30
@@ -31,7 +31,6 @@ simu_opts_max_utts=20
 source activate ovad
 
 # derived
-data_augment_root=${exp_root}/aug  # TODO: necessary?
 eend_code_root=${SCRIPT_DIR}/../../../
 
 if [[ -z "${KALDI_ROOT}" ]]; then
@@ -40,25 +39,31 @@ if [[ -z "${KALDI_ROOT}" ]]; then
 fi
 mkdir -p $exp_root
 
+# now moved to path.sh
+## add some kaldi stuff to the path
+#export PATH=$PATH:$KALDI_ROOT/src/featbin:$KALDI_ROOT/src/nnet3bin/:$KALDI_ROOT/src/bin/:$KALDI_ROOT/tools/openfst/bin/
+
 wsj_dir=${KALDI_ROOT}/egs/wsj/s5/
 diar_dir=${KALDI_ROOT}/egs/callhome_diarization/v1
 
 # setup sym links for steps & utils w/ wsj
-# NOTE: don't think this is necessary
-#cd $SCRIPT_DIR
-#ln -s $wsj_dir/steps steps
-#ln -s $wsj_dir/utils utils
+cd $SCRIPT_DIR
+ln -s $wsj_dir/steps steps
+ln -s $wsj_dir/utils utils
+ln -s $wsj_dir/local local
+
+. ./cmd.sh
+. ./path.sh
 
 module load ffmpeg
 
 if [ $begin_stage -le 0 ] && [ $end_stage -ge 0 ]; then
+    echo "prepare kaldi-style datasets"
     pushd .
     cd $diar_dir
-
-    echo "prepare kaldi-style datasets"
     # Prepare CALLHOME dataset. This will be used to evaluation.
-    if ! validate_data_dir.sh --no-text --no-feats "${exp_root}/data/callhome1_spk2" \
-        || ! validate_data_dir.sh --no-text --no-feats "${exp_root}/data/callhome2_spk2"; then
+    if ! utils/validate_data_dir.sh --no-text --no-feats "${exp_root}/data/callhome1_spk2" \
+        || ! utils/validate_data_dir.sh --no-text --no-feats "${exp_root}/data/callhome2_spk2"; then
         # imported from https://github.com/kaldi-asr/kaldi/blob/master/egs/callhome_diarization/v1
         local/make_callhome.sh $callhome_dir "${exp_root}/data"
         # Generate two-speaker subsets
@@ -84,12 +89,17 @@ if [ $begin_stage -le 0 ] && [ $end_stage -ge 0 ]; then
             utils/data/get_reco2dur.sh "${exp_root}/data/${dset}_spk2"
         done
     fi
+    popd
+fi
+
+if [ $begin_stage -le 1 ] && [ $end_stage -ge 1 ]; then
     # Prepare a collection of NIST SRE and SWB data. This will be used to train,
-    if ! validate_data_dir.sh --no-text --no-feats ${exp_root}/data/swb_sre_comb; then
+    if ! utils/validate_data_dir.sh --no-text --no-feats ${exp_root}/data/swb_sre_comb; then
         local/make_sre.sh $data_root ${exp_root}/data
         # Prepare SWB for x-vector DNN training.
-        local/make_swbd2_phase1.pl $swb2_phase1_train \
-            ${exp_root}/data/swbd2_phase1_train
+        # TODO: fix this later, something is messed up w/ the corpus on the grid ... 
+        #local/make_swbd2_phase1.pl $swb2_phase1_train \
+        #    ${exp_root}/data/swbd2_phase1_train
         local/make_swbd2_phase2.pl $data_root/LDC99S79 \
             ${exp_root}/data/swbd2_phase2_train
         local/make_swbd2_phase3.pl $data_root/LDC2002S06 \
@@ -99,52 +109,65 @@ if [ $begin_stage -le 0 ] && [ $end_stage -ge 0 ]; then
         local/make_swbd_cellular2.pl $data_root/LDC2004S07 \
             ${exp_root}/data/swbd_cellular2_train
         # Combine swb and sre data
+        #${exp_root}/data/swbd2_phase1_train \
         utils/combine_data.sh ${exp_root}/data/swb_sre_comb \
             ${exp_root}/data/swbd_cellular1_train ${exp_root}/data/swbd_cellular2_train \
-            ${exp_root}/data/swbd2_phase1_train \
             ${exp_root}/data/swbd2_phase2_train ${exp_root}/data/swbd2_phase3_train ${exp_root}/data/sre
     fi
+fi
+
+if [ $begin_stage -le 2 ] && [ $end_stage -ge 2 ]; then
     # musan data. "back-ground
-    if ! validate_data_dir.sh --no-text --no-feats ${exp_root}/data/musan_noise_bg; then
+    if ! utils/validate_data_dir.sh --no-text --no-feats ${exp_root}/data/musan_noise_bg; then
         steps/data/make_musan.sh $musan_root ${exp_root}/data
         utils/copy_data_dir.sh data/musan_noise ${exp_root}/data/musan_noise_bg
         awk '{if(NR>1) print $1,$1}'  $musan_root/noise/free-sound/ANNOTATIONS > ${exp_root}/data/musan_noise_bg/utt2spk
         utils/fix_data_dir.sh ${exp_root}/data/musan_noise_bg
     fi
     # simu rirs 8k
-    if ! validate_data_dir.sh --no-text --no-feats ${exp_root}/data/simu_rirs_8k; then
+    if ! utils/validate_data_dir.sh --no-text --no-feats ${exp_root}/data/simu_rirs_8k; then
         mkdir -p ${exp_root}/data/simu_rirs_8k
         if [ ! -e sim_rir_8k.zip ]; then
-            wget --no-check-certificate http://www.openslr.org/resources/26/sim_rir_8k.zip
+            wget --no-check-certificate http://www.openslr.org/resources/26/sim_rir_8k.zip -P $exp_root
         fi
-        unzip sim_rir_8k.zip -d ${exp_root}/data/sim_rir_8k
-        find $PWD/data/sim_rir_8k -iname "*.wav" \
+        unzip $exp_root/sim_rir_8k.zip -d ${exp_root}/data/simu_rir_8k
+        find ${exp_root}/data/simu_rir_8k -iname "*.wav" \
             | awk '{n=split($1,A,/[\/\.]/); print A[n-3]"_"A[n-1], $1}' \
-            | sort > ${exp_root}/data/simu_rirs_8k/wav.scp
-        awk '{print $1, $1}' ${exp_root}/data/simu_rirs_8k/wav.scp > ${exp_root}/data/simu_rirs_8k/utt2spk
-        utils/fix_data_dir.sh ${exp_root}/data/simu_rirs_8k
+            | sort > ${exp_root}/data/simu_rir_8k/wav.scp
+        awk '{print $1, $1}' ${exp_root}/data/simu_rir_8k/wav.scp > ${exp_root}/data/simu_rir_8k/utt2spk
+        utils/fix_data_dir.sh ${exp_root}/data/simu_rir_8k
     fi
+fi
 
-    # TODO: understand why using this SAD vs. the Energy-SAD?
+if [ $begin_stage -le 3 ] && [ $end_stage -ge 3 ]; then
+    echo "segmenting datasets"
+     # TODO: understand why using this SAD vs. the Energy-SAD?
     # Automatic segmentation using pretrained SAD model
     #     it will take one day using 30 CPU jobs:
     #     make_mfcc: 1 hour, compute_output: 18 hours, decode: 0.5 hours
     sad_nnet_dir=${exp_root}/exp/segmentation_1a/tdnn_stats_asr_sad_1a
     sad_work_dir=${exp_root}/exp/segmentation_1a/tdnn_stats_asr_sad_1a
-    if ! validate_data_dir.sh --no-text "$sad_work_dir"/swb_sre_comb_seg; then
+    if ! utils/validate_data_dir.sh --no-text "$sad_work_dir"/swb_sre_comb_seg; then
         if [ ! -d ${exp_root}/exp/segmentation_1a ]; then
-            wget http://kaldi-asr.org/models/4/0004_tdnn_stats_asr_sad_1a.tar.gz
-            tar zxf 0004_tdnn_stats_asr_sad_1a.tar.gz
+            wget http://kaldi-asr.org/models/4/0004_tdnn_stats_asr_sad_1a.tar.gz -P ${exp_root}
+            tar zxf ${exp_root}/0004_tdnn_stats_asr_sad_1a.tar.gz
         fi
+        # mfcc_hires.conf gets extracted w/ the downloaded SAD model
+        cp ${exp_root}/conf/mfcc_hires.conf conf/
+        ln -s $wsj_dir/utils/parse_options.sh parse_options.sh
+        ln -s $wsj_dir/utils/split_data.sh split_data.sh
         steps/segmentation/detect_speech_activity.sh \
+            --cmd "utils/queue.pl --mem 32G -l h_rt=200:00:00" \
             --nj $sad_num_jobs \
             --graph-opts "$sad_graph_opts" \
             --transform-probs-opts "$sad_priors_opts" $sad_opts \
             "${exp_root}"/data/swb_sre_comb $sad_nnet_dir mfcc_hires $sad_work_dir \
             $sad_work_dir/swb_sre_comb || exit 1
+        rm parse_options.sh
+        rm split_data.sh
     fi
     # Extract >1.5 sec segments and split into train/valid sets
-    if ! validate_data_dir.sh --no-text --no-feats ${exp_root}/data/swb_sre_cv; then
+    if ! utils/validate_data_dir.sh --no-text --no-feats ${exp_root}/data/swb_sre_cv; then
         copy_data_dir.sh ${exp_root}/data/swb_sre_comb ${exp_root}/data/swb_sre_comb_seg
         awk '$4-$3>1.5{print;}' $sad_work_dir/swb_sre_comb_seg/segments > ${exp_root}/data/swb_sre_comb_seg/segments
         cp $sad_work_dir/swb_sre_comb_seg/{utt2spk,spk2utt} ${exp_root}/data/swb_sre_comb_seg
@@ -153,10 +176,7 @@ if [ $begin_stage -le 0 ] && [ $end_stage -ge 0 ]; then
     fi
 fi
 
-if [ $begin_stage -le 1 ] && [ $end_stage -ge 1 ]; then
-    . ./cmd.sh
-    pushd .
-    cd $wsj_dir
+if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
     # simulate mixtures w/ the dataset
     # from: https://github.com/hitachi-speech/EEND/blob/master/egs/mini_librispeech/v1/run_prepare_shared.sh#L67
     echo "simulation of mixture"
@@ -188,7 +208,7 @@ if [ $begin_stage -le 1 ] && [ $end_stage -ge 1 ]; then
                     $random_mixture_cmd --n_speakers $simu_opts_num_speaker --n_mixtures $n_mixtures \
                     --speech_rvb_probability $simu_opts_rvb_prob \
                     --sil_scale $simu_opts_sil_scale \
-                    $exp_root/$dset $data_augment_root/musan $data_augment_root/sim_rirs_16k \
+                    $exp_root/data/$dset ${exp_root}/data/musan ${exp_root}/data/simu_rir_8k \
                     \> $simudir/.work/mixture_$simuid.scp
                 nj=100
                 mkdir -p $simudir/wav/$simuid
@@ -215,18 +235,17 @@ if [ $begin_stage -le 1 ] && [ $end_stage -ge 1 ]; then
             fi
         done
     done
-    popd
 fi
 
 # create kaldi-data-dir for callhome
-if [ $begin_stage -le 2 ] && [ $end_stage -ge 2 ]; then
+if [ $begin_stage -le 5 ] && [ $end_stage -ge 5 ]; then
     # compose eval/callhome2_spk2
     eval_set=${exp_root}/data/eval/callhome2_spk2
     if ! validate_data_dir.sh --no-text --no-feats $eval_set; then
         utils/copy_data_dir.sh ${exp_root}/data/callhome2_spk2 $eval_set
-        cp data/callhome2_spk2/rttm $eval_set/rttm
-        awk -v dstdir=wav/eval/callhome2_spk2 '{print $1, dstdir"/"$1".wav"}' ${exp_root}/data/callhome2_spk2/wav.scp > $eval_set/wav.scp
-        mkdir -p wav/eval/callhome2_spk2
+        cp $exp_root/data/callhome2_spk2/rttm $eval_set/rttm
+        awk -v dstdir=$exp_root/wav/eval/callhome2_spk2 '{print $1, dstdir"/"$1".wav"}' ${exp_root}/data/callhome2_spk2/wav.scp > $eval_set/wav.scp
+        mkdir -p $exp_root/wav/eval/callhome2_spk2
         wav-copy scp:${exp_root}/data/callhome2_spk2/wav.scp scp:$eval_set/wav.scp
         utils/data/get_reco2dur.sh $eval_set
     fi
@@ -236,8 +255,8 @@ if [ $begin_stage -le 2 ] && [ $end_stage -ge 2 ]; then
     if ! validate_data_dir.sh --no-text --no-feats $adapt_set; then
         utils/copy_data_dir.sh ${exp_root}/data/callhome1_spk2 $adapt_set
         cp ${exp_root}/data/callhome1_spk2/rttm $adapt_set/rttm
-        awk -v dstdir=wav/eval/callhome1_spk2 '{print $1, dstdir"/"$1".wav"}' ${exp_root}/data/callhome1_spk2/wav.scp > $adapt_set/wav.scp
-        mkdir -p wav/eval/callhome1_spk2
+        awk -v dstdir=$exp_root/wav/eval/callhome1_spk2 '{print $1, dstdir"/"$1".wav"}' ${exp_root}/data/callhome1_spk2/wav.scp > $adapt_set/wav.scp
+        mkdir -p $exp_root/wav/eval/callhome1_spk2
         wav-copy scp:${exp_root}/data/callhome1_spk2/wav.scp scp:$adapt_set/wav.scp
         utils/data/get_reco2dur.sh $adapt_set
     fi
