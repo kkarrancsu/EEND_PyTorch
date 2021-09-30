@@ -9,8 +9,8 @@ data_root="/export/common/data/corpora/LDC"
 callhome_dir="${data_root}/LDC2001S97"
 swb2_phase1_train="${data_root}/LDC98S75"
 musan_root="/export/common/data/corpora/MUSAN/musan"
-begin_stage=5
-end_stage=5
+begin_stage=4
+end_stage=4
 
 # data preparation options
 sad_num_jobs=30
@@ -141,7 +141,7 @@ fi
 
 if [ $begin_stage -le 3 ] && [ $end_stage -ge 3 ]; then
     echo "segmenting datasets"
-     # TODO: understand why using this SAD vs. the Energy-SAD?
+    # TODO: understand why using this SAD vs. the Energy-SAD?
     # Automatic segmentation using pretrained SAD model
     #     it will take one day using 30 CPU jobs:
     #     make_mfcc: 1 hour, compute_output: 18 hours, decode: 0.5 hours
@@ -195,7 +195,7 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
 
     for simu_opts_sil_scale in 2; do
         for dset in swb_sre_tr swb_sre_cv; do
-            if [ "$dset" == "train_segments" ]; then
+            if [ "$dset" == "swb_sre_tr" ]; then
                 n_mixtures=$simu_opts_num_train
             else
                 n_mixtures=500
