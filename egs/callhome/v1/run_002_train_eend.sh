@@ -6,7 +6,7 @@ exp_root=${1:-"/expscratch/kkarra/diarization/callhome"}
 eend_code_root=${SCRIPT_DIR}/../../../
 
 conf_dir=${SCRIPT_DIR}/conf/
-train_dir=${exp_root}/mixture_sim/data/swb_sre_tr_ns2_beta2_500
+train_dir=${exp_root}/mixture_sim/data/swb_sre_tr_ns2_beta2_100000
 dev_dir=${exp_root}/mixture_sim/data/swb_sre_cv_ns2_beta2_500
 model_dir=${exp_root}/models
 #train_conf=${conf_dir}/train_eda_base.yaml

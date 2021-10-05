@@ -1,4 +1,5 @@
 #!/bin/bash
+set +x
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 exp_root=${1:-"/expscratch/kkarra/diarization/callhome"}
@@ -44,13 +45,14 @@ mkdir -p $exp_root
 #export PATH=$PATH:$KALDI_ROOT/src/featbin:$KALDI_ROOT/src/nnet3bin/:$KALDI_ROOT/src/bin/:$KALDI_ROOT/tools/openfst/bin/
 
 wsj_dir=${KALDI_ROOT}/egs/wsj/s5/
+sre16_dir=${KALDI_ROOT}/egs/sre16/v1
 diar_dir=${KALDI_ROOT}/egs/callhome_diarization/v1
 
 # setup sym links for steps & utils w/ wsj
 cd $SCRIPT_DIR
 ln -s $wsj_dir/steps steps
 ln -s $wsj_dir/utils utils
-ln -s $wsj_dir/local local
+ln -s $sre16_dir/local local
 
 . ./cmd.sh
 . ./path.sh
@@ -95,7 +97,24 @@ fi
 if [ $begin_stage -le 1 ] && [ $end_stage -ge 1 ]; then
     # Prepare a collection of NIST SRE and SWB data. This will be used to train,
     if ! utils/validate_data_dir.sh --no-text --no-feats ${exp_root}/data/swb_sre_comb; then
-        local/make_sre.sh $data_root ${exp_root}/data
+        local/make_sre.sh $data_root ${exp_root}/data  # make older sre data, 2004-2006.
+        sre_ref=data/local/speaker_list  # gets downloaded by the make_sre.sh script
+
+        # TODO: debug SRE08 b/c the script isn't working b/c it cant find a certain file,
+        #   ensure our data on the cluster is OK
+        #local/make_sre08.pl $data_root/LDC2011S08 $data_root/LDC2011S05 $exp_root/data/
+        # TODO: include sre10??
+
+        # TODO: add SRE08 and SRE10 to the list once you've fixed those data preps
+        utils/combine_data.sh $exp_root/data/sre \
+            $exp_root/data/sre2004 $exp_root/data/sre2005_train \
+            $exp_root/data/sre2005_test $exp_root/data/sre2006_train \
+            $exp_root/data/sre2006_test_1 $exp_root/data/sre2006_test_2
+
+        utils/validate_data_dir.sh --no-text --no-feats $exp_root/data/sre
+        utils/fix_data_dir.sh $exp_root/data/sre
+        rm data/local/speaker_list.*
+
         # Prepare SWB for x-vector DNN training.
         # TODO: fix this later, something is messed up w/ the corpus on the grid ... 
         #local/make_swbd2_phase1.pl $swb2_phase1_train \
@@ -125,8 +144,8 @@ if [ $begin_stage -le 2 ] && [ $end_stage -ge 2 ]; then
         utils/fix_data_dir.sh ${exp_root}/data/musan_noise_bg
     fi
     # simu rirs 8k
-    if ! utils/validate_data_dir.sh --no-text --no-feats ${exp_root}/data/simu_rirs_8k; then
-        mkdir -p ${exp_root}/data/simu_rirs_8k
+    if ! utils/validate_data_dir.sh --no-text --no-feats ${exp_root}/data/simu_rir_8k; then
+        mkdir -p ${exp_root}/data/simu_rir_8k
         if [ ! -e sim_rir_8k.zip ]; then
             wget --no-check-certificate http://www.openslr.org/resources/26/sim_rir_8k.zip -P $exp_root
         fi
@@ -150,7 +169,7 @@ if [ $begin_stage -le 3 ] && [ $end_stage -ge 3 ]; then
     if ! utils/validate_data_dir.sh --no-text "$sad_work_dir"/swb_sre_comb_seg; then
         if [ ! -d ${exp_root}/exp/segmentation_1a ]; then
             wget http://kaldi-asr.org/models/4/0004_tdnn_stats_asr_sad_1a.tar.gz -P ${exp_root}
-            tar zxf ${exp_root}/0004_tdnn_stats_asr_sad_1a.tar.gz
+            tar zxf ${exp_root}/0004_tdnn_stats_asr_sad_1a.tar.gz -C $exp_root
         fi
         # mfcc_hires.conf gets extracted w/ the downloaded SAD model
         cp ${exp_root}/conf/mfcc_hires.conf conf/
@@ -161,7 +180,7 @@ if [ $begin_stage -le 3 ] && [ $end_stage -ge 3 ]; then
             --nj $sad_num_jobs \
             --graph-opts "$sad_graph_opts" \
             --transform-probs-opts "$sad_priors_opts" $sad_opts \
-            "${exp_root}"/data/swb_sre_comb $sad_nnet_dir mfcc_hires $sad_work_dir \
+            ${exp_root}/data/swb_sre_comb $sad_nnet_dir mfcc_hires $sad_work_dir \
             $sad_work_dir/swb_sre_comb || exit 1
         rm parse_options.sh
         rm split_data.sh
@@ -194,7 +213,8 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
     fi
 
     for simu_opts_sil_scale in 2; do
-        for dset in swb_sre_tr swb_sre_cv; do
+        #for dset in swb_sre_tr swb_sre_cv; do
+        for dset in swb_sre_tr; do
             if [ "$dset" == "swb_sre_tr" ]; then
                 n_mixtures=$simu_opts_num_train
             else
@@ -203,6 +223,8 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
             simuid=${dset}_ns${simu_opts_num_speaker}_beta${simu_opts_sil_scale}_${n_mixtures}
             # check if you have the simulation
             if ! utils/validate_data_dir.sh --no-text --no-feats $simudir/data/$simuid; then
+                #################
+                 
                 # random mixture generation
                 $simu_cmd $simudir/.work/random_mixture_$simuid.log \
                     $random_mixture_cmd --n_speakers $simu_opts_num_speaker --n_mixtures $n_mixtures \
@@ -210,6 +232,9 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
                     --sil_scale $simu_opts_sil_scale \
                     $exp_root/data/$dset ${exp_root}/data/musan ${exp_root}/data/simu_rir_8k \
                     \> $simudir/.work/mixture_$simuid.scp
+                
+                ###################
+                
                 nj=100
                 mkdir -p $simudir/wav/$simuid
                 # distribute simulated data to $simu_actual_dir
@@ -222,11 +247,16 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
                     ln -nfs $actual $simudir/wav/$simuid/$n
                 done
                 utils/split_scp.pl $simudir/.work/mixture_$simuid.scp $split_scps || exit 1
-
+                
+                ##################
                 $simu_cmd --max-jobs-run 32 JOB=1:$nj $simudir/.work/make_mixture_$simuid.JOB.log \
                     $make_mixture_cmd --rate=8000 \
                     $simudir/.work/mixture_$simuid.JOB.scp \
                     $simudir/.work/data_$simuid.JOB $simudir/wav/$simuid/JOB
+                # TODO: potentially make sure that each sub-dir is good. I've noticed issues with
+                #  creation of utt2spk being incorrect, and haven't been able to track down why,
+                #  so a brute force fix is to just ensure that each $simudir/.work/data_$simuid.JOB is 
+                #  a valid kaldi directory
                 utils/combine_data.sh $simudir/data/$simuid $simudir/.work/data_$simuid.*
                 steps/segmentation/convert_utt2spk_and_segments_to_rttm.py \
                     $simudir/data/$simuid/utt2spk $simudir/data/$simuid/segments \
