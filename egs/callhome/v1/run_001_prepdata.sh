@@ -3,6 +3,7 @@ set +x
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 exp_root=${1:-"/expscratch/kkarra/diarization/callhome"}
+export LC_ALL=C
 
 nj=40
 
@@ -10,8 +11,8 @@ data_root="/export/common/data/corpora/LDC"
 callhome_dir="${data_root}/LDC2001S97"
 swb2_phase1_train="${data_root}/LDC98S75"
 musan_root="/export/common/data/corpora/MUSAN/musan"
-begin_stage=4
-end_stage=4
+begin_stage=0
+end_stage=5
 
 # data preparation options
 sad_num_jobs=30
@@ -223,8 +224,6 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
             simuid=${dset}_ns${simu_opts_num_speaker}_beta${simu_opts_sil_scale}_${n_mixtures}
             # check if you have the simulation
             if ! utils/validate_data_dir.sh --no-text --no-feats $simudir/data/$simuid; then
-                #################
-                 
                 # random mixture generation
                 $simu_cmd $simudir/.work/random_mixture_$simuid.log \
                     $random_mixture_cmd --n_speakers $simu_opts_num_speaker --n_mixtures $n_mixtures \
@@ -232,8 +231,6 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
                     --sil_scale $simu_opts_sil_scale \
                     $exp_root/data/$dset ${exp_root}/data/musan ${exp_root}/data/simu_rir_8k \
                     \> $simudir/.work/mixture_$simuid.scp
-                
-                ###################
                 
                 nj=100
                 mkdir -p $simudir/wav/$simuid
@@ -248,7 +245,6 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
                 done
                 utils/split_scp.pl $simudir/.work/mixture_$simuid.scp $split_scps || exit 1
                 
-                ##################
                 $simu_cmd --max-jobs-run 32 JOB=1:$nj $simudir/.work/make_mixture_$simuid.JOB.log \
                     $make_mixture_cmd --rate=8000 \
                     $simudir/.work/mixture_$simuid.JOB.scp \

@@ -10,7 +10,7 @@
 #export cmd="utils/queue.pl --mem 32G -l h_rt=200:00:00"  # L166 of steps/segmentation/detect_speech_activity.sh" uses "cmd" variable
 export train_cmd="utils/queue.pl --mem 32G -l 'hostname=c*'"  # TODO: update this to a GPU node
 export infer_cmd="utils/queue.pl --mem 32G -l 'hostname=c*'"  # TODO: update this to a GPU node
-export simu_cmd="utils/queue.pl --mem 4G"
+export simu_cmd="utils/queue.pl --mem 4G -l h_rt=48:00:00"  # simulation creation takes a long time!
 
 # If you use SLURM, use "slurm.pl".
 # export train_cmd="slurm.pl"
