@@ -214,8 +214,7 @@ if [ $begin_stage -le 4 ] && [ $end_stage -ge 4 ]; then
     fi
 
     for simu_opts_sil_scale in 2; do
-        #for dset in swb_sre_tr swb_sre_cv; do
-        for dset in swb_sre_tr; do
+        for dset in swb_sre_tr swb_sre_cv; do
             if [ "$dset" == "swb_sre_tr" ]; then
                 n_mixtures=$simu_opts_num_train
             else
