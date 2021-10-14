@@ -1,5 +1,5 @@
 # inference options
-sampling_rate: 16000
+sampling_rate: 8000
 frame_size: 200
 frame_shift: 80
 model_type: Transformer

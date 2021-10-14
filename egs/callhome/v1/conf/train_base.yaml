@@ -3,7 +3,7 @@ sampling_rate: 8000
 frame_size: 200
 frame_shift: 80
 model_type: Transformer
-max_epochs: 100
+max_epochs: 500
 gradclip: 5
 batchsize: 64
 hidden_size: 256

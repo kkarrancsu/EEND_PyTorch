@@ -14,12 +14,23 @@ train_conf=${conf_dir}/train_base.yaml
 
 module load ffmpeg
 source activate ovad
-pushd . 
-cd ${eend_code_root}
+
+./cmd.sh
 
 num_gpus="auto-detect"   # can be an integer, or auto-detect to use all gpus available
                          # the --gpu auto-detect option overrides configuration in the yaml file
-~/.conda/envs/ovad/bin/python eend/bin/train.py -c $train_conf --gpu $num_gpus --num-workers 16 \
+~/.conda/envs/ovad/bin/python $eend_code_root/eend/bin/train.py -c $train_conf --gpu $num_gpus --num-workers 16 \
     $train_dir $dev_dir $model_dir
 
-popd
+:'
+work_dir=$model_dir/.work
+mkdir -p $work_dir
+$train_cmd $work_dir/train.log \
+    $eend_code_root/eend/bin/train.py \
+        -c $train_conf \
+        --gpu $num_gpus \
+        --num-workers 16 \
+        $train_dir \
+        $dev_dir \
+        $model_dir || exit 1
+'
