@@ -23,8 +23,8 @@ module load ffmpeg
 model_dir=${exp_root}/models
 
 # Model averaging options
-average_start=91
-average_end=100
+average_start=400
+average_end=500
 
 ave_id=avg${average_start}-${average_end}
 echo "averaging model parameters into $model_dir/$ave_id.nnet.npz"

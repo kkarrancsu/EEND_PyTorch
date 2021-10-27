@@ -44,8 +44,8 @@ infer_config_id+=$(echo $infer_args | sed -e 's/\-\-/_/g' -e 's/=//g' -e 's/ \+/
 model_id=$train_id.$valid_id.$train_config_id
 model_dir=$exp_root/models/
 # from 003 --> make a common config
-average_start=91
-average_end=100
+average_start=400
+average_end=500
 ave_id=avg${average_start}-${average_end}
 
 infer_dir=$exp_root/exp/diarize/infer/$model_id.$ave_id.$infer_config_id
